@@ -52,3 +52,39 @@ PY
 **PLAN.md link:** [PLAN.md](https://github.com/NickHibram/pathreview-ai201-fa26-howard/blob/feat/20-dependency-audit-tool/PLAN.md)
 
 **Blockers or open questions:**
+
+## Unit 9 — Solution building & PR submission
+
+### Check-in 1 (mid-week)
+
+**Current progress:**
+I completed steps 1–3 in `PLAN.md`. I reproduced the missed Vite and Vitest findings in a unit test, added parsing and version comparison for `package.json`, `requirements.txt`, and `pyproject.toml`, and added GitHub retrieval for manifests on the default branch, including nested files. The unit suite passed after the retrieval changes with 388 passing tests and 53 expected failures.
+
+**Next steps:**
+I’ll finish steps 4–5 by wiring the audit into the orchestrator, testing both supplied manifests and submitted GitHub repositories, and rerunning the Vite and Vitest reproduction. Then I’ll run the project checks and submit the PR.
+
+**Blockers:**
+None. The first unit run was blocked by a tokenizer download, which I resolved by caching the tokenizer data locally.
+
+---
+
+### Check-in 2 (end of week)
+
+**PR link:** [PathReview PR #108 — Dependency audit tool](https://github.com/codepath/pathreview-ai201-fa26-howard/pull/108)
+
+**Branch:** `feat/20-dependency-audit-tool`
+
+**What you built:**
+I built a dependency audit tool that reads npm and Python manifests supplied directly or fetched from a submitted GitHub repository. It compares the highest major version allowed by each declaration with the current stable release and flags gaps of two or more majors. The orchestrator returns the findings and warns about any files or dependencies the audit could not check.
+
+**Tests added or updated:**
+- `tests/unit/test_dependency_audit_tool.py` covers all three manifest formats, version boundaries, malformed inputs, and registry failures and limits.
+- `tests/unit/test_github_tool.py` covers nested manifest retrieval, skipped vendor files, and partial GitHub failures.
+- `tests/unit/test_orchestrator.py` covers both input paths, fresh results across runs, and the Vite and Vitest reproduction. The final unit run had 401 passes and 53 expected failures.
+
+**Self-review confirmation**
+
+- [x] `make check` passes
+- [x] `make test-unit` passes
+
+**Draft PR feedback received from:** none
