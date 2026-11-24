@@ -17,3 +17,41 @@ When dependencies are several major versions behind, they can cause failures or 
 **Setup confirmation:** [X] App runs locally at localhost:5173
 
 **Cohort ledger:** [X] Issue added to cohort ledger
+
+## Unit 8 — Reproduction & solution planning
+
+**Reproduction commit link:** [link to commit documenting the reproduced issue]
+
+**Reproduction summary:**
+I ran the orchestrator locally with PathReview’s own manifests and checked the frontend lockfile, which uses Vite 5.4.21 and Vitest 1.6.1 while their current major releases are 8 and 5. Both dependencies should be flagged under issue #20, but `agent/orchestrator.py` only schedules technology detection and market analysis for these inputs, so the output identifies JavaScript and Node.js without reporting either outdated dependency.
+
+**Reproduction steps:** Run this from the repo root after local setup.
+
+```bash
+.venv/bin/python - <<'PY'
+import json
+from pathlib import Path
+
+from agent.orchestrator import Orchestrator
+from agent.tools.market_analyzer import MarketAnalyzer
+from agent.tools.tech_detector import TechDetector
+
+lock = json.loads(Path("frontend/package-lock.json").read_text())["packages"]
+for name in ("vite", "vitest"):
+    print(name, lock[f"node_modules/{name}"]["version"])
+
+tools = (TechDetector(), MarketAnalyzer())
+orchestrator = Orchestrator({tool.name: tool for tool in tools})
+files = ["pyproject.toml", "frontend/package.json", "frontend/package-lock.json"]
+result = orchestrator.run("issue-20-repro", {"files": files})
+print("Tool results:", sorted(result["tool_results"]))
+print("Technology detection:", result["tool_results"]["tech_detector"])
+PY
+```
+
+**PLAN.md link:** [link to PLAN.md in your fork]
+
+**Walkthrough video (recommended):** [link to your Loom video, ≤2 min — recommended, not graded]
+
+**Blockers or open questions:**
+[Anything you're still uncertain about going into Unit 9, or leave blank]
