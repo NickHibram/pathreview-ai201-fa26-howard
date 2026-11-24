@@ -15,11 +15,11 @@ from packaging.utils import canonicalize_name
 from packaging.version import InvalidVersion, Version
 
 from .base import BaseTool, ToolResult
+from .github_tool import MANIFEST_NAMES, GitHubTool
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-MANIFEST_NAMES = frozenset({"requirements.txt", "package.json", "pyproject.toml"})
 NPM_PACKAGE = re.compile(r"(?:@[a-z0-9._-]+/)?[a-z0-9._-]+", re.IGNORECASE)
 NPM_RANGE = re.compile(r"(?P<operator>[~^=]?)v?(?P<major>0|[1-9]\d*)(?:\.\d+){0,2}")
 NPM_STABLE = re.compile(r"(?:0|[1-9]\d*)(?:\.(?:0|[1-9]\d*)){2}(?:\+[a-zA-Z0-9.-]+)?")
@@ -31,30 +31,44 @@ class DependencyAuditTool(BaseTool):
     name = "dependency_audit"
     description = "Check repository manifests for dependencies two or more major versions behind"
 
-    def __init__(self, latest_version: Callable[[str, str], str | None] | None = None) -> None:
+    def __init__(
+        self,
+        latest_version: Callable[[str, str], str | None] | None = None,
+        *,
+        github_tool: GitHubTool | None = None,
+    ) -> None:
         """Initialize the tool.
 
         Args:
             latest_version: Optional lookup accepting an ecosystem and package name.
+            github_tool: Optional GitHub client for reading submitted repositories.
         """
         self._latest_version = latest_version or _fetch_latest_version
+        self._github_tool = github_tool if github_tool is not None else GitHubTool()
 
     def execute(self, input_data: dict) -> ToolResult:
-        """Audit supplied manifest contents.
+        """Audit supplied manifest contents or a submitted repository.
 
         Args:
-            input_data: A dictionary containing a manifests mapping from paths to text.
+            input_data: A manifests mapping from paths to text, or github_username and repo_name.
 
         Returns:
             Findings and warnings about incomplete coverage.
         """
         manifests = input_data.get("manifests")
+        warnings: list[str] = []
+        if "manifests" not in input_data:
+            username = input_data.get("github_username")
+            repo_name = input_data.get("repo_name")
+            if isinstance(username, str) and isinstance(repo_name, str):
+                manifests, warnings = self._github_tool.fetch_dependency_manifests(
+                    username, repo_name
+                )
         if not isinstance(manifests, dict):
-            message = "A manifest mapping is required"
+            message = "Provide manifest contents or a GitHub repository reference"
             return ToolResult(False, {"findings": [], "warnings": [message]}, message)
 
         findings = []
-        warnings: list[str] = []
         versions: dict[tuple[str, str], tuple[str, int] | None] = {}
         for path, contents in manifests.items():
             filename = PurePosixPath(path).name
