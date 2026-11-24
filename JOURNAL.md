@@ -20,7 +20,7 @@ When dependencies are several major versions behind, they can cause failures or 
 
 ## Unit 8 — Reproduction & solution planning
 
-**Reproduction commit link:** [link to commit documenting the reproduced issue]
+**Reproduction commit link:** [01ee826 — document dependency audit gap reproduction](https://github.com/NickHibram/pathreview-ai201-fa26-howard/commit/01ee8267e5411694b8eb04529e869d96c223722a)
 
 **Reproduction summary:**
 I ran the orchestrator locally with PathReview’s own manifests and checked the frontend lockfile, which uses Vite 5.4.21 and Vitest 1.6.1 while their current major releases are 8 and 5. Both dependencies should be flagged under issue #20, but `agent/orchestrator.py` only schedules technology detection and market analysis for these inputs, so the output identifies JavaScript and Node.js without reporting either outdated dependency.
@@ -49,9 +49,6 @@ print("Technology detection:", result["tool_results"]["tech_detector"])
 PY
 ```
 
-**PLAN.md link:** [link to PLAN.md in your fork]
-
-**Walkthrough video (recommended):** [link to your Loom video, ≤2 min — recommended, not graded]
+**PLAN.md link:** [PLAN.md](https://github.com/NickHibram/pathreview-ai201-fa26-howard/blob/feat/20-dependency-audit-tool/PLAN.md)
 
 **Blockers or open questions:**
-[Anything you're still uncertain about going into Unit 9, or leave blank]
