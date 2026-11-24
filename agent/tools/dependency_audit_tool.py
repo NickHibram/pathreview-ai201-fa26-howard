@@ -1,0 +1,210 @@
+"""Audit direct dependency declarations against current registry releases."""
+
+from __future__ import annotations
+
+import json
+import re
+import tomllib
+from pathlib import PurePosixPath
+from typing import TYPE_CHECKING
+from urllib.parse import quote
+
+import httpx
+from packaging.requirements import InvalidRequirement, Requirement
+from packaging.utils import canonicalize_name
+from packaging.version import InvalidVersion, Version
+
+from .base import BaseTool, ToolResult
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+MANIFEST_NAMES = frozenset({"requirements.txt", "package.json", "pyproject.toml"})
+NPM_PACKAGE = re.compile(r"(?:@[a-z0-9._-]+/)?[a-z0-9._-]+", re.IGNORECASE)
+NPM_RANGE = re.compile(r"(?P<operator>[~^=]?)v?(?P<major>0|[1-9]\d*)(?:\.\d+){0,2}")
+NPM_STABLE = re.compile(r"(?:0|[1-9]\d*)(?:\.(?:0|[1-9]\d*)){2}(?:\+[a-zA-Z0-9.-]+)?")
+
+
+class DependencyAuditTool(BaseTool):
+    """Flag direct dependency declarations two or more majors behind."""
+
+    name = "dependency_audit"
+    description = "Check repository manifests for dependencies two or more major versions behind"
+
+    def __init__(self, latest_version: Callable[[str, str], str | None] | None = None) -> None:
+        """Initialize the tool.
+
+        Args:
+            latest_version: Optional lookup accepting an ecosystem and package name.
+        """
+        self._latest_version = latest_version or _fetch_latest_version
+
+    def execute(self, input_data: dict) -> ToolResult:
+        """Audit supplied manifest contents.
+
+        Args:
+            input_data: A dictionary containing a manifests mapping from paths to text.
+
+        Returns:
+            Findings and warnings about incomplete coverage.
+        """
+        manifests = input_data.get("manifests")
+        if not isinstance(manifests, dict):
+            message = "A manifest mapping is required"
+            return ToolResult(False, {"findings": [], "warnings": [message]}, message)
+
+        findings = []
+        warnings: list[str] = []
+        versions: dict[tuple[str, str], tuple[str, int] | None] = {}
+        for path, contents in manifests.items():
+            filename = PurePosixPath(path).name
+            if filename not in MANIFEST_NAMES:
+                continue
+            try:
+                dependencies = _parse_manifest(filename, contents)
+            except (TypeError, ValueError) as exc:
+                warnings.append(f"{path}: could not parse manifest ({exc})")
+                continue
+
+            for ecosystem, name, specifier, highest_major in dependencies:
+                if highest_major is None:
+                    warnings.append(
+                        f"{path}: cannot establish a major bound for {name} {specifier}"
+                    )
+                    continue
+
+                key = (ecosystem, name)
+                if key not in versions:
+                    try:
+                        latest = self._latest_version(*key)
+                        versions[key] = (
+                            (latest, _stable_major(ecosystem, latest)) if latest else None
+                        )
+                    except (httpx.HTTPError, KeyError, TypeError, ValueError):
+                        versions[key] = None
+                resolved = versions[key]
+                if resolved is None:
+                    warnings.append(f"{path}: no current stable version available for {name}")
+                    continue
+
+                latest, latest_major = resolved
+                gap = latest_major - highest_major
+                if gap > 1:
+                    findings.append(
+                        {
+                            "ecosystem": ecosystem,
+                            "package": name,
+                            "manifest": path,
+                            "specifier": specifier,
+                            "highest_allowed_major": highest_major,
+                            "latest_version": latest,
+                            "major_gap": gap,
+                        }
+                    )
+
+        return ToolResult(True, {"findings": findings, "warnings": warnings})
+
+
+def _parse_manifest(filename: str, contents: str) -> list[tuple[str, str, str, int | None]]:
+    if filename == "package.json":
+        manifest = _mapping(json.loads(contents))
+        dependencies = []
+        for section in ("dependencies", "devDependencies"):
+            for name, specifier in _mapping(manifest.get(section, {})).items():
+                bound = None
+                if isinstance(specifier, str) and NPM_PACKAGE.fullmatch(name):
+                    version_range = specifier.strip()
+                    match = NPM_RANGE.fullmatch(version_range)
+                    if match and (match["operator"] in ("^", "~") or version_range.count(".") == 2):
+                        bound = int(match["major"])
+                dependencies.append(("npm", name, str(specifier), bound))
+        return dependencies
+
+    if filename == "pyproject.toml":
+        project = _mapping(tomllib.loads(contents).get("project", {}))
+        requirements = _string_list(project.get("dependencies", []))
+        for group in _mapping(project.get("optional-dependencies", {})).values():
+            requirements += _string_list(group)
+    else:
+        requirements = [re.split(r"^#|\s+#", line, maxsplit=1)[0] for line in contents.splitlines()]
+    return [_parse_python_requirement(line.strip()) for line in requirements if line.strip()]
+
+
+def _mapping(value: object) -> dict:
+    if not isinstance(value, dict):
+        raise ValueError("expected a table or object")
+    return value
+
+
+def _string_list(value: object) -> list[str]:
+    if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
+        raise ValueError("expected a list of dependency strings")
+    return list(value)
+
+
+def _parse_python_requirement(declaration: str) -> tuple[str, str, str, int | None]:
+    try:
+        requirement = Requirement(declaration)
+    except InvalidRequirement:
+        return "pypi", declaration, "", None
+
+    prefix = re.match(r"^[\w.-]+(?:\s*\[[^\]]*\])?", declaration)
+    specifier = declaration[prefix.end() :].strip() if prefix else declaration
+    bound = None if requirement.url or requirement.marker else _python_upper_major(requirement)
+    return "pypi", canonicalize_name(requirement.name), specifier, bound
+
+
+def _python_upper_major(requirement: Requirement) -> int | None:
+    ceilings = []
+    floors = []
+    for specifier in requirement.specifier:
+        operator = specifier.operator
+        if operator == "!=":
+            continue
+        if operator == "===":
+            return None
+        version = Version(specifier.version.removesuffix(".*"))
+        if version.epoch or version.is_prerelease or version.local:
+            return None
+        if operator in ("==", "~=", "<=", "<"):
+            ceiling = version.major
+            if operator == "<" and not any(version.release[1:]) and not version.is_postrelease:
+                ceiling -= 1
+            ceilings.append(ceiling)
+        if operator in ("==", "~=", ">=", ">"):
+            floors.append(version.major)
+    if not ceilings or min(ceilings) < max(floors, default=0):
+        return None
+    return min(ceilings)
+
+
+def _stable_major(ecosystem: str, version: str) -> int:
+    if ecosystem == "npm":
+        if not NPM_STABLE.fullmatch(version):
+            raise ValueError("expected a stable npm version")
+        return int(version.split(".", 1)[0])
+    parsed = Version(version)
+    if parsed.is_prerelease or parsed.epoch:
+        raise ValueError("expected a stable Python release without an epoch")
+    return parsed.major
+
+
+def _fetch_latest_version(ecosystem: str, name: str) -> str | None:
+    package = quote(name, safe="")
+    if ecosystem == "npm":
+        response = httpx.get(f"https://registry.npmjs.org/{package}/latest", timeout=5.0)
+        response.raise_for_status()
+        return _mapping(response.json())["version"]
+
+    response = httpx.get(f"https://pypi.org/pypi/{package}/json", timeout=5.0)
+    response.raise_for_status()
+    releases = _mapping(_mapping(response.json())["releases"])
+    stable = []
+    for release, files in releases.items():
+        try:
+            version = Version(release)
+        except InvalidVersion:
+            continue
+        if not version.is_prerelease and any(not _mapping(file)["yanked"] for file in files):
+            stable.append(version)
+    return str(max(stable)) if stable else None
