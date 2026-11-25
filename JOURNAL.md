@@ -88,3 +88,33 @@ I built a dependency audit tool that reads npm and Python manifests supplied dir
 - [x] `make test-unit` passes
 
 **Draft PR feedback received from:** none
+
+## Unit 10 — Iteration & reflection
+
+### Reviewer feedback
+
+**Feedback received:** [ ] Yes  [X] No — still awaiting review
+
+**Summary of feedback:**
+I’m still awaiting reviewer feedback on [PR #108](https://github.com/codepath/pathreview-ai201-fa26-howard/pull/108). As of November 25, 2026, the PR has no submitted reviews or discussion comments.
+
+**How you responded:**
+
+---
+
+### Reflection
+
+**What was harder than you expected?**
+Figuring out which major versions a declaration actually allows took more work than I expected. For example, `redis>=5` can allow major 8, while `<6,!=5.*` rules out all of major 5. Writing those cases as tests helped me pin down when the tool had enough evidence to flag a dependency.
+
+**What did you learn about working in a large codebase?**
+I learned to trace how data reaches an existing feature before deciding where to change it. The technology detector receives filenames, while the dependency audit needs the contents of those files. I had to fit the new tool into the existing orchestrator and GitHub client while preserving how the other tools are selected and run.
+
+**How did AI tools help — and where did they fall short?**
+AI helped me trace the agent code, turn the Vite and Vitest reproduction into a test, and review the first implementation. The first pass missed some Python exclusions and could lose valid findings when a neighboring manifest was malformed. A second review surfaced those cases, and running the regression tests before and after the fixes showed whether the changes worked.
+
+**What would you do differently if you started over?**
+I’d write down a small table of version ranges and expected findings before implementing the parser. I’d also include a malformed manifest and a failed lookup in the first test cases so I could verify early that the tool still returns findings from the other dependencies.
+
+**What are you most proud of from this module?**
+I’m most proud of turning a missing warning into a repeatable regression test using PathReview’s own frontend manifest. With fixed registry responses, the test shows the orchestrator reporting both Vite and Vitest with the expected gaps of three and four major versions.
